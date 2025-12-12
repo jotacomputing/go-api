@@ -6,26 +6,25 @@ import (
 	"sync/atomic"
 	"unsafe"
 	"github.com/edsrzf/mmap-go"
-	"jotacomputing/go-api"
 )
 
-// orders ShmOrder{}
+// orders Order{}
 
-type Order struct {
-	// All uint64s first (8-byte aligned)
-	OrderID   uint64
-	Price     uint64
-	Timestamp uint64
-	// Then uint32s (4-byte aligned)
-	ClientID uint32
-	SharesQuantity uint32
-	Symbol uint32
-	// Then uint8s (1-byte aligned)
-	Side   uint8 // 0=buy, 1=sell
-	OrderType uint8 // 0=market order 1=limit order
-	Status uint8 // 0=pending, 1=filled, 2=rejected
-	
-}
+// type Order struct {
+// 	// All uint64s first (8-byte aligned)
+// 	OrderID   uint64
+// 	Price     uint64
+// 	Timestamp uint64
+// 	// Then uint32s (4-byte aligned)
+// 	ClientID uint32
+// 	SharesQuantity uint32
+// 	Symbol uint32
+// 	// Then uint8s (1-byte aligned)
+// 	Side   uint8 // 0=buy, 1=sell
+// 	OrderType uint8 // 0=market order 1=limit order
+// 	Status uint8 // 0=pending, 1=filled, 2=rejected
+// 	
+// }
 
 type QueueHeader struct {
 	ProducerHead uint64   // Offset 0 4 byte interger 

@@ -3,13 +3,11 @@ package main
 import (
 	"fmt"
 	"log"
-	"math/rand"
-	"os"
 	"time"
 )
 
 const queueFilePath = "/tmp/sex"
-const order = queue.Order{
+var order = Order{
 	order_id:   3, //uint64
 	price: 		12000, //uint64
 	timestamp: 	uint64(time.Now().UnixNano()),
@@ -25,7 +23,7 @@ const order = queue.Order{
 func initQueue(filePath string) {
 	fmt.Println("[INIT] Initializing shared memory queue...")
 
-	q, err := queue.CreateQueue(filePath)
+	q, err := CreateQueue(filePath)
 	if err != nil {
 		log.Fatalf("Failed to create queue: %v", err)
 	}
@@ -38,7 +36,7 @@ func initQueue(filePath string) {
 
 	// Create status queue too
 	fmt.Println("\n[INIT] Initializing status feedback queue...")
-	statusQ, err := queue.CreateQueue(filePath + "_status")
+	statusQ, err := CreateQueue(filePath + "_status")
 	if err != nil {
 		log.Fatalf("Failed to create status queue: %v", err)
 	}
@@ -49,30 +47,30 @@ func initQueue(filePath string) {
 }
 
 // sendOrder sends a single order
-func sendOrder(order ShmOrder) {
-	q, err := queue.OpenQueue(queueFilePath)
+func sendOrder(filePath string, order *Order) {
+	q, err := OpenQueue(filePath)
 	if err != nil {
 		log.Fatalf("Failed to open queue: %v", err)
 	}
 	defer q.Close()
 
-	if err := q.Enqueue(order); err != nil {
+	if err := q.Enqueue((*order)); err != nil {
 		log.Fatalf("Failed to enqueue: %v", err)
 	}
 
 	fmt.Printf("[COMM] Single order sent successfully\n")
-	fmt.Printf("       OrderID: %d\n", order.OrderID)
-	fmt.Printf("       Symbol: %s\n", string(order.Symbol))
-	fmt.Printf("       Qty: %d @ %d\n", order.Quantity, order.Price)
+	fmt.Printf("       OrderID: %d\n", (*order).order_id)
+	fmt.Printf("       Symbol: %s\n", string((*order).symbol))
+	fmt.Printf("       Qty: %d @ %d\n", (*order).shares_qty, (*order).price)
 	fmt.Printf("       Queue depth: %d\n", q.Depth())
 }
 
 
 // orderBatch sends given number of orders rapidly
-func orderBatch(orders *[]ShmOrder, size int, maxRetries int) {
-	fmt.Println("[COMM] Sending batch of %v orders...", n)
+func orderBatch(filePath string, orders *[]Order, size int, maxRetries int) {
+	fmt.Println("[COMM] Sending batch of %v orders...", size)
 
-	q, err := queue.OpenQueue(queueFilePath)
+	q, err := OpenQueue(filePath)
 	if err != nil {
 		log.Fatalf("Failed to open queue: %v", err)
 	}
@@ -83,7 +81,7 @@ func orderBatch(orders *[]ShmOrder, size int, maxRetries int) {
 	backpressureCount := 0
 
 	for i := 1; i <= size; i++ {
-		order := orders[i]
+		order := (*orders)[i]
 		retries := 0
 
 		for {
@@ -121,5 +119,6 @@ func orderBatch(orders *[]ShmOrder, size int, maxRetries int) {
 }
 
 func main() {
- 	initQueue()
+ 	initQueue(queueFilePath)
+	sendOrder(queueFilePath, &order)
 }

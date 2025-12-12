@@ -1,6 +1,6 @@
 package main
 
-type ShmOrder struct {
+type Order struct {
 	order_id uint64
 	price uint64
 	timestamp uint64
