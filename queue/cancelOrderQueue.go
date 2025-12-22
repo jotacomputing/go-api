@@ -1,32 +1,20 @@
-package main
+package queue
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"strconv"
 	"sync/atomic"
 	"unsafe"
+
 	"github.com/edsrzf/mmap-go"
+	"jotacomputing/go-api/structs"
 )
 
-// orders Order{}
+const OrderCancelSize = unsafe.Sizeof(structs.OrderToBeCancelled{})
 
-// type Order struct {
-// 	// All uint64s first (8-byte aligned)
-// 	OrderID   uint64
-// 	Price     uint64
-// 	Timestamp uint64
-// 	// Then uint32s (4-byte aligned)
-// 	ClientID uint32
-// 	SharesQuantity uint32
-// 	Symbol uint32
-// 	// Then uint8s (1-byte aligned)
-// 	Side   uint8 // 0=buy, 1=sell
-// 	OrderType uint8 // 0=market order 1=limit order
-// 	Status uint8 // 0=pending, 1=filled, 2=rejected
-// 	
-// }
-
-type QueueHeader struct {
+type CancelQueueHeader struct {
 	ProducerHead uint64   // Offset 0 4 byte interger 
 	_pad1        [56]byte // Padding to cache line
 	ConsumerTail uint64   // Offset 64
@@ -35,22 +23,58 @@ type QueueHeader struct {
 	Capacity     uint32   // Offset 132
 }
 
-const (
-	QueueMagic    = 0xDEADBEEF
-	QueueCapacity = 65536 // !!IMP: match Rust
-	OrderSize     = unsafe.Sizeof(Order{})
-	HeaderSize    = unsafe.Sizeof(QueueHeader{})
-	TotalSize     = HeaderSize + (QueueCapacity * OrderSize)
-)
-
-type Queue struct {
+type CancelQueue struct {
 	file   *os.File
 	mmap   mmap.MMap   // this is the array of bytes wich we will use to read and write 
-	header *QueueHeader
-	orders []Order
+	header *CancelQueueHeader
+	orders []structs.OrderToBeCancelled
 }
 
-func CreateQueue(filePath string) (*Queue, error) {
+func SendCancelOrder(filePath string, cancelOrder *structs.OrderToBeCancelled) {
+	q, err := OpenCancelQueue(filePath)
+	if err != nil {
+		log.Fatalf("Failed to open queue: %v", err)
+	}
+	defer q.Close()
+
+	if err := q.Enqueue((*cancelOrder)); err != nil {
+		log.Fatalf("Failed to enqueue: %v", err)
+	}
+
+	fmt.Printf("[COMM] Single order cancel sent successfully\n")
+	fmt.Printf("       OrderID: %d\n", (*cancelOrder).Order_id)
+	fmt.Printf("       Symbol: %s\n", strconv.FormatUint(uint64((*cancelOrder).Symbol), 10))
+	fmt.Printf("       Queue depth: %d\n", q.Depth())
+}
+
+// the create queue and open queue function will be the same
+func InitCancelQueue(filePath string) {
+	fmt.Println("[INIT] Initializing shared memory queue...")
+
+	q, err := CreateCancelQueue(filePath)
+	if err != nil {
+		log.Fatalf("Failed to create queue: %v", err)
+	}
+	defer q.Close()
+
+	fmt.Printf("[INIT] Queue initialized successfully\n")
+	fmt.Printf("[INIT] Capacity: %d orders\n", q.Capacity())
+	fmt.Printf("[INIT] Queue depth: %d\n", q.Depth())
+	fmt.Printf("[INIT] File: %s (size: ~3.2 MB)\n", filePath)
+
+	// Create status queue too
+	fmt.Println("\n[INIT] Initializing status feedback queue...")
+	statusQ, err := CreateQueue(filePath + "_status")
+	if err != nil {
+		log.Fatalf("Failed to create status queue: %v", err)
+	}
+	defer statusQ.Close()
+
+	fmt.Printf("[INIT] Status queue initialized successfully\n")
+	fmt.Printf("[INIT] File: %s_status (size: ~3.2 MB)\n", filePath)
+}
+
+func CreateCancelQueue(filePath string) (*CancelQueue, error) {
 	_ = os.Remove(filePath)
 
 	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
@@ -83,7 +107,7 @@ func CreateQueue(filePath string) (*Queue, error) {
 	}
 
 	// initialize header
-	header := (*QueueHeader)(unsafe.Pointer(&m[0]))
+	header := (*CancelQueueHeader)(unsafe.Pointer(&m[0]))
 	atomic.StoreUint64(&header.ProducerHead, 0)
 	atomic.StoreUint64(&header.ConsumerTail, 0)
 	atomic.StoreUint32(&header.Magic, QueueMagic)
@@ -104,19 +128,18 @@ func CreateQueue(filePath string) (*Queue, error) {
 		file.Close()
 		return nil, fmt.Errorf("orders region empty")
 	}
-	orders := unsafe.Slice((*Order)(unsafe.Pointer(&ordersData[0])), QueueCapacity)
+	orders := unsafe.Slice((*structs.OrderToBeCancelled)(unsafe.Pointer(&ordersData[0])), QueueCapacity)
 
-	return &Queue{
+	return &CancelQueue{
 		file:   file,
 		mmap:   m,
 		header: header,
 		orders: orders,
 	}, nil
-
 }
 
 // open queue from file on disk and return *Queue mmap-ed
-func OpenQueue(filePath string) (*Queue, error) {
+func OpenCancelQueue(filePath string) (*CancelQueue, error) {
 	file, err := os.OpenFile(filePath, os.O_RDWR, 0o666)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -144,7 +167,7 @@ func OpenQueue(filePath string) (*Queue, error) {
 	}
 
 	// validate header
-	header := (*QueueHeader)(unsafe.Pointer(&m[0]))
+	header := (*CancelQueueHeader)(unsafe.Pointer(&m[0]))
 	if atomic.LoadUint32(&header.Magic) != QueueMagic {
 		m.Unlock()
 		m.Unmap()
@@ -165,9 +188,9 @@ func OpenQueue(filePath string) (*Queue, error) {
 		file.Close()
 		return nil, fmt.Errorf("orders region empty")
 	}
-	orders := unsafe.Slice((*Order)(unsafe.Pointer(&ordersData[0])), QueueCapacity)
+	orders := unsafe.Slice((*structs.OrderToBeCancelled)(unsafe.Pointer(&ordersData[0])), QueueCapacity)
 
-	return &Queue{
+	return &CancelQueue{
 		file:   file,
 		mmap:   m,
 		header: header,
@@ -175,7 +198,7 @@ func OpenQueue(filePath string) (*Queue, error) {
 	}, nil
 }
 
-func (q *Queue) Enqueue(order Order) error {
+func (q *CancelQueue) Enqueue(order structs.OrderToBeCancelled) error {
 	consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
 	producerHead := atomic.LoadUint64(&q.header.ProducerHead)
 
@@ -193,7 +216,7 @@ func (q *Queue) Enqueue(order Order) error {
 	return nil
 }
 
-func (q *Queue) Dequeue() (*Order, error) {
+func (q *CancelQueue) Dequeue() (*structs.OrderToBeCancelled, error) {
 	producerHead := atomic.LoadUint64(&q.header.ProducerHead)
 	consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
 
@@ -208,22 +231,21 @@ func (q *Queue) Dequeue() (*Order, error) {
 	atomic.StoreUint64(&q.header.ConsumerTail, consumerTail+1)
 	return &order, nil
 }
-
-func (q *Queue) Depth() uint64 {
+func (q *CancelQueue) Depth() uint64 {
 	producerHead := atomic.LoadUint64(&q.header.ProducerHead)
 	consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
 	return producerHead - consumerTail
 }
 
-func (q *Queue) Capacity() uint64 {
+func (q *CancelQueue) Capacity() uint64 {
 	return QueueCapacity
 }
 
-func (q *Queue) Flush() error {
+func (q *CancelQueue) Flush() error {
 	return q.mmap.Flush()
 }
 
-func (q *Queue) Close() error {
+func (q *CancelQueue) Close() error {
 	_ = q.mmap.Flush()
 	_ = q.mmap.Unlock()
 	if err := q.mmap.Unmap(); err != nil {
@@ -232,3 +254,6 @@ func (q *Queue) Close() error {
 	}
 	return q.file.Close()
 }
+
+
+
