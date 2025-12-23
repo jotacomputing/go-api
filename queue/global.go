@@ -46,4 +46,8 @@ func CloseQueues() {
 	if CancelOrderQueue != nil {
 		CancelOrderQueue.Close()
 	}
+	if QueriesQueue != nil {
+		QueriesQueue.Close()
+	}
+	
 }

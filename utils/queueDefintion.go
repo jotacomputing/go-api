@@ -1,6 +1,6 @@
 package utils
 
-const IncomingOrderQueuePath = "/tmp/trading/IncomingOrders"
-const CancelOrderQueuePath = "/tmp/trading/CancelOrders"
-const QueryQueuePath = "/tmp/trading/queries"
-const QueryResQueuePath = "/tmp/trading/QueryResponse"
+const IncomingOrderQueuePath = "/tmp/IncomingOrders"
+const CancelOrderQueuePath = "/tmp/CancelOrders"
+const QueryQueuePath = "/tmp/queries"
+const QueryResQueuePath = "/tmp/QueryResponse"
