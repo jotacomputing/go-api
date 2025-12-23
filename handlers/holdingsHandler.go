@@ -34,12 +34,12 @@ func GetHoldingsHandler(c echo.Context) error {
 	query.User_id = userID
 
 	// Enqueue the query
-	if err := queue.QueriesQueue.Enqueue(&query); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to enqueue query")
-	}
+	if err := queue.QueriesQueue.Enqueue(query); err != nil {   
+        return echo.NewHTTPError(http.StatusInternalServerError, "Failed to enqueue balance query") 
+    }
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"status":   "Holdings query sent successfully",
+		"status":   "Balance query sent successfully",
 		"query_id": query.Query_id,
 		"user_id":  userID,
 	})

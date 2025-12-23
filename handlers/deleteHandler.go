@@ -38,10 +38,9 @@ func CancelOrderHandler(c echo.Context) error {
 	cancelOrder.Symbol = tempOrderCancel.Symbol
 
 	// Enqueue the order cancel
-	if err := queue.CancelOrderQueue.Enqueue(&cancelOrder); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to enqueue order cancel request")
+	if err := queue.CancelOrderQueue.Enqueue(cancelOrder); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to enqueue cancel order")
 	}
-
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"status":   "Order cancel request sent successfully",
 		"order_id": cancelOrder.Order_id,

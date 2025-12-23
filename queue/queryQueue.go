@@ -28,7 +28,7 @@ type QueryQueue struct {
 	file   *os.File
 	mmap   mmap.MMap   // this is the array of bytes wich we will use to read and write 
 	header *QueryQueueHeader
-	queryPtrs []uintptr // ← POINTERS (8 bytes each, no copy!)
+	orders []structs.Query
 }
 
 
@@ -105,20 +105,20 @@ func CreateQueryQueue(filePath string) (*QueryQueue, error) {
 		return nil, fmt.Errorf("failed to flush mmap: %w", err)
 	}
 
-	ptrsData := m[int(QueryHeaderSize):int(TotalQuerySize)]
-	if len(ptrsData) == 0 {
+	ordersData := m[int(QueryHeaderSize):int(TotalQuerySize)]
+	if len(ordersData) == 0 {
 		m.Unlock()
 		m.Unmap()
 		file.Close()
-		return nil, fmt.Errorf("query orders region empty")
+		return nil, fmt.Errorf("orders region empty")
 	}
-	queryPtrs := unsafe.Slice((*uintptr)(unsafe.Pointer(&ptrsData[0])), QueueCapacity)
+	orders := unsafe.Slice((*structs.Query)(unsafe.Pointer(&ordersData[0])), QueueCapacity)
 
 	return &QueryQueue{
-		file:       file,
-		mmap:       m,
-		header:     header,
-		queryPtrs: queryPtrs, // ✅ Pointers!
+		file:   file,
+		mmap:   m,
+		header: header,
+		orders: orders,
 	}, nil
 }
 
@@ -136,7 +136,7 @@ func OpenQueryQueue(filePath string) (*QueryQueue, error) {
 	}
 	if stat.Size() != int64(TotalQuerySize) {
 		file.Close()
-		return nil, fmt.Errorf("invalid file size: got %d, expected %d", stat.Size(), int64(TotalSize))
+		return nil, fmt.Errorf("invalid file size: got %d, expected %d", stat.Size(), int64(TotalQuerySize))
 	}
 
 	m, err := mmap.Map(file, mmap.RDWR, 0)
@@ -164,58 +164,54 @@ func OpenQueryQueue(filePath string) (*QueryQueue, error) {
 		return nil, fmt.Errorf("capacity mismatch: file=%d code=%d", header.Capacity, QueueCapacity)
 	}
 
-	ptrsData := m[int(QueryHeaderSize):int(TotalQuerySize)]
-	if len(ptrsData) == 0 {
+	ordersData := m[int(QueryHeaderSize):int(TotalQuerySize)]
+	if len(ordersData) == 0 {
 		m.Unlock()
 		m.Unmap()
 		file.Close()
-		return nil, fmt.Errorf("query orders region empty")
+		return nil, fmt.Errorf("orders region empty")
 	}
-	queryPtrs := unsafe.Slice((*uintptr)(unsafe.Pointer(&ptrsData[0])), QueueCapacity)
+	orders := unsafe.Slice((*structs.Query)(unsafe.Pointer(&ordersData[0])), QueueCapacity)
 
 	return &QueryQueue{
-		file:       file,
-		mmap:       m,
-		header:     header,
-		queryPtrs: queryPtrs, // ✅ Pointers!
+		file:   file,
+		mmap:   m,
+		header: header,
+		orders: orders,
 	}, nil
 }
 
-func (q *QueryQueue) Enqueue(query *structs.Query) error {
-    consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
-    producerHead := atomic.LoadUint64(&q.header.ProducerHead)
+func (q *QueryQueue) Enqueue(order structs.Query) error {
+	consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
+	producerHead := atomic.LoadUint64(&q.header.ProducerHead)
 
-    nextHead := producerHead + 1
-    if nextHead-consumerTail > QueueCapacity {
-        return fmt.Errorf("query queue full - backpressure %d/%d", 
-            nextHead-consumerTail, QueueCapacity)
-    }
+	nextHead := producerHead + 1
+	if nextHead-consumerTail > QueueCapacity {
+		return fmt.Errorf("queue full - consumer too slow, backpressure at depth %d/%d",
+			nextHead-consumerTail, QueueCapacity)
+	}
 
-    pos := producerHead % QueueCapacity
-    
-    // ✅ ZERO-COPY: Store POINTER only (8 bytes!)
-    atomic.StoreUintptr(&q.queryPtrs[pos], uintptr(unsafe.Pointer(query)))
-    
-    atomic.StoreUint64(&q.header.ProducerHead, nextHead)
-    return nil
+	pos := producerHead % QueueCapacity
+	q.orders[pos] = order
+
+	// Publish after write; seq-cst store is sufficient
+	atomic.StoreUint64(&q.header.ProducerHead, nextHead)
+	return nil
 }
-
 func (q *QueryQueue) Dequeue() (*structs.Query, error) {
-    producerHead := atomic.LoadUint64(&q.header.ProducerHead)
-    consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
+	producerHead := atomic.LoadUint64(&q.header.ProducerHead)
+	consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
 
-    if consumerTail == producerHead {
-        return nil, nil
-    }
+	if consumerTail == producerHead {
+		return nil, nil
+	}
 
-    pos := consumerTail % QueueCapacity
-    
-    // ✅ ZERO-COPY: Load pointer and dereference
-    queryPtr := atomic.LoadUintptr(&q.queryPtrs[pos])
-    query := (*structs.Query)(unsafe.Pointer(queryPtr))
+	pos := consumerTail % QueueCapacity
+	order := q.orders[pos]
 
-    atomic.StoreUint64(&q.header.ConsumerTail, consumerTail+1)
-    return query, nil
+	// Mark consumed; seq-cst store is sufficient
+	atomic.StoreUint64(&q.header.ConsumerTail, consumerTail+1)
+	return &order, nil
 }
 
 func (q *QueryQueue) Depth() uint64 {

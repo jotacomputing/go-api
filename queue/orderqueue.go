@@ -33,7 +33,7 @@ type Queue struct {
 	file   *os.File
 	mmap   mmap.MMap   // this is the array of bytes wich we will use to read and write 
 	header *QueueHeader
-	orderPtrs []uintptr    // ← POINTERS (8 bytes each, no copy!)
+	orders []structs.Order
 }
 
 
@@ -65,6 +65,7 @@ func InitQueue(filePath string) {
 	fmt.Printf("[INIT] Status queue initialized successfully\n")
 	fmt.Printf("[INIT] File: %s_status (size: ~3.2 MB)\n", filePath)
 }
+
 
 func CreateQueue(filePath string) (*Queue, error) {
 	_ = os.Remove(filePath)
@@ -113,20 +114,20 @@ func CreateQueue(filePath string) (*Queue, error) {
 		return nil, fmt.Errorf("failed to flush mmap: %w", err)
 	}
 
-	ptrsData := m[int(HeaderSize):int(TotalSize)]
-	if len(ptrsData) == 0 {
+	ordersData := m[int(HeaderSize):int(TotalSize)]
+	if len(ordersData) == 0 {
 		m.Unlock()
-        m.Unmap()
-        file.Close()
-        return nil, fmt.Errorf(" orders region empty")
+		m.Unmap()
+		file.Close()
+		return nil, fmt.Errorf("orders region empty")
 	}
-	orderPtrs := unsafe.Slice((*uintptr)(unsafe.Pointer(&ptrsData[0])), QueueCapacity)
+	orders := unsafe.Slice((*structs.Order)(unsafe.Pointer(&ordersData[0])), QueueCapacity)
 
 	return &Queue{
-		file:      file,
-		mmap:      m,
-		header:    header,
-		orderPtrs: orderPtrs,  // ← Pointer slice
+		file:   file,
+		mmap:   m,
+		header: header,
+		orders: orders,
 	}, nil
 
 }
@@ -174,59 +175,56 @@ func OpenQueue(filePath string) (*Queue, error) {
 		return nil, fmt.Errorf("capacity mismatch: file=%d code=%d", header.Capacity, QueueCapacity)
 	}
 
-	ptrsData := m[int(HeaderSize):int(TotalSize)]
-	if len(ptrsData) == 0 {
+	ordersData := m[int(HeaderSize):int(TotalSize)]
+	if len(ordersData) == 0 {
 		m.Unlock()
-        m.Unmap()
-        file.Close()
-        return nil, fmt.Errorf(" orders region empty")
+		m.Unmap()
+		file.Close()
+		return nil, fmt.Errorf("orders region empty")
 	}
-	orderPtrs := unsafe.Slice((*uintptr)(unsafe.Pointer(&ptrsData[0])), QueueCapacity)
+	orders := unsafe.Slice((*structs.Order)(unsafe.Pointer(&ordersData[0])), QueueCapacity)
 
 	return &Queue{
-		file:      file,
-		mmap:      m,
-		header:    header,
-		orderPtrs: orderPtrs,  // ← Pointer slice
+		file:   file,
+		mmap:   m,
+		header: header,
+		orders: orders,
 	}, nil
 }
 
-func (q *Queue) Enqueue(order *structs.Order) error {  // ← POINTER!
-    consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
-    producerHead := atomic.LoadUint64(&q.header.ProducerHead)
+func (q *Queue) Enqueue(order structs.Order) error {
+	consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
+	producerHead := atomic.LoadUint64(&q.header.ProducerHead)
 
-    nextHead := producerHead + 1
-    if nextHead-consumerTail > QueueCapacity {
-        return fmt.Errorf("queue full - backpressure %d/%d", 
-            nextHead-consumerTail, QueueCapacity)
-    }
+	nextHead := producerHead + 1
+	if nextHead-consumerTail > QueueCapacity {
+		return fmt.Errorf("queue full - consumer too slow, backpressure at depth %d/%d",
+			nextHead-consumerTail, QueueCapacity)
+	}
 
-    pos := producerHead % QueueCapacity
-    
-    // ✅ ZERO-COPY: Store POINTER (8 bytes only!)
-    atomic.StoreUintptr(&q.orderPtrs[pos], uintptr(unsafe.Pointer(order)))
-    
-    atomic.StoreUint64(&q.header.ProducerHead, nextHead)
-    return nil
+	pos := producerHead % QueueCapacity
+	q.orders[pos] = order
+
+	// Publish after write; seq-cst store is sufficient
+	atomic.StoreUint64(&q.header.ProducerHead, nextHead)
+	return nil
 }
 
-// ✅ AFTER (Read from pointers)
 func (q *Queue) Dequeue() (*structs.Order, error) {
-    producerHead := atomic.LoadUint64(&q.header.ProducerHead)
-    consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
+	producerHead := atomic.LoadUint64(&q.header.ProducerHead)
+	consumerTail := atomic.LoadUint64(&q.header.ConsumerTail)
 
-    if consumerTail == producerHead {
-        return nil, nil
-    }
+	if consumerTail == producerHead {
+		return nil, nil
+	}
 
-    pos := consumerTail % QueueCapacity
-    orderPtr := atomic.LoadUintptr(&q.orderPtrs[pos])
-    order := (*structs.Order)(unsafe.Pointer(orderPtr))
+	pos := consumerTail % QueueCapacity
+	order := q.orders[pos]
 
-    atomic.StoreUint64(&q.header.ConsumerTail, consumerTail+1)
-    return order, nil
+	// Mark consumed; seq-cst store is sufficient
+	atomic.StoreUint64(&q.header.ConsumerTail, consumerTail+1)
+	return &order, nil
 }
-
 
 func (q *Queue) Depth() uint64 {
 	producerHead := atomic.LoadUint64(&q.header.ProducerHead)

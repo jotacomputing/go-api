@@ -79,11 +79,11 @@ func CreateUser(username string, balance float64) (*User, error) {
 
 	//here only we add a queury to add user to balance manager
 	var query structs.Query
-	query.Query_id = uint64(id) // using user id as query id
-	query.Query_type = 2        // add user on login
+	query.Query_id = 0   //deafult for new logins
+	query.Query_type = 2 // add user on login
 	query.User_id = uint64(id)
 	// Enqueue the query
-	if err := queue.QueriesQueue.Enqueue(&query); err != nil {
+	if err := queue.QueriesQueue.Enqueue(query); err != nil {
 		return nil, err
 	}
 
