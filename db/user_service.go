@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"jotacomputing/go-api/queue"
 	"jotacomputing/go-api/structs"
-	"jotacomputing/go-api/utils"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver
 )
@@ -84,7 +83,9 @@ func CreateUser(username string, balance float64) (*User, error) {
 	query.Query_type = 2        // add user on login
 	query.User_id = uint64(id)
 	// Enqueue the query
-	queue.SendQuery(utils.QueryQueuePath, &query)
+	if err := queue.QueriesQueue.Enqueue(&query); err != nil {
+		return nil, err
+	}
 
 	return FindUserByID(id) // Fetch complete user record
 }

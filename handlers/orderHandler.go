@@ -4,7 +4,7 @@ import (
     "jotacomputing/go-api/structs"
     "net/http"
     "jotacomputing/go-api/queue"
-    "jotacomputing/go-api/utils"
+    
     "strconv"
     
     "github.com/labstack/echo/v4"
@@ -46,10 +46,12 @@ func PostOrderHandler(c echo.Context) error {
     order.Symbol = tempOrder.Symbol
     order.Side = tempOrder.Side
     order.Order_type = tempOrder.Order_type
-    order.Status = 'O' // pending
+    order.Status = 0 // pending
 
     // Enqueue the order
-    queue.SendOrder(utils.IncomingOrderQueuePath, &order)
+    if err := queue.IncomingOrderQueue.Enqueue(&order); err != nil {
+        return echo.NewHTTPError(http.StatusInternalServerError, "Failed to enqueue order")
+    }
 
     
     return c.JSON(http.StatusOK, map[string]interface{}{
